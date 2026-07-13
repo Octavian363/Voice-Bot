@@ -1,0 +1,9 @@
+.env
+node_modules/
+input_*.wav
+output_*.mp3
+npm-debug.log*
+.DS_Store
+Thumbs.db
+ffmpeg/
+recordings/
