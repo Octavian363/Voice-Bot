@@ -101,15 +101,16 @@ function processQueue() {
 
 function downloadTTSWithFallback(voiceType, text, dest, lang) {
     return new Promise((resolve, reject) => {
-        // Curățăm textul de caractere ciudate care pot prăbuși URL-ul (Fix eroare 400)
         const cleanText = text.replace(/["'\\]/g, '').trim();
         const encodedText = encodeURIComponent(cleanText);
 
+        // Dacă limba este română
         if (lang === 'ro') {
             const googleRoUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=ro&client=tw-ob`;
             return fetchDirectUrl(googleRoUrl, dest).then(resolve).catch(reject);
         }
 
+        // Configurare voci pentru Engleză
         let targetRegion = lang; 
         if (lang === 'en') {
             if (voiceType === 'Brian') targetRegion = 'en-AU';
@@ -119,17 +120,19 @@ function downloadTTSWithFallback(voiceType, text, dest, lang) {
             else if (voiceType === 'Aditi') targetRegion = 'en-IN';
         }
 
+        // URL universal în funcție de limba returnată de AI (suportă ORICE limbă din lume)
         const primaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${targetRegion}&client=tw-ob`;
 
         fetchDirectUrl(primaryUrl, dest)
             .then(resolve)
             .catch(() => {
+                // Fallback A: StreamElements
                 const streamElementsUrl = `https://api.streamelements.com/v2/tts?voice=${voiceType}&text=${encodedText}`;
                 fetchDirectUrl(streamElementsUrl, dest)
                     .then(resolve)
                     .catch(() => {
-                        // Planul C: fallback absolut pe engleză standard Google dacă totul crapă
-                        const absoluteBackupUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=en&client=tw-ob`;
+                        // Fallback B: Google Translate standard pe limba detectată
+                        const absoluteBackupUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${lang}&client=tw-ob`;
                         fetchDirectUrl(absoluteBackupUrl, dest).then(resolve).catch(reject);
                     });
             });
@@ -170,7 +173,6 @@ const client = new Client({
     ]
 });
 
-// POPICĂ FIXATĂ: Schimbat evenimentul 'ready' în 'clientReady' conform avertismentului din consolă
 client.once('clientReady', async () => {
     console.log(`Bot ${client.user.tag} is online and ready!`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -186,19 +188,16 @@ client.once('clientReady', async () => {
     }
 });
 
-// FIX RECONECTARE NEVOITĂ: Verificăm mult mai atent dacă serverul e chiar gol
 client.on('voiceStateUpdate', (oldState, newState) => {
     const botConnection = getVoiceConnection(oldState.guild.id);
     if (!botConnection) return;
 
     const botChannelId = botConnection.joinConfig.channelId;
     
-    // Verificăm doar dacă starea modificată aparține canalului în care se află botul
     if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
         const channel = oldState.guild.channels.cache.get(botChannelId);
         if (channel) {
             const humanMembers = channel.members.filter(m => !m.user.bot).size;
-            // Verificăm dacă chiar nu mai e nimeni, ignorând microfoanele oprite/pornite
             if (humanMembers === 0) {
                 console.log('No members left in channel. Leaving...');
                 botConnection.destroy();
@@ -271,7 +270,7 @@ client.on('interactionCreate', async (interaction) => {
             const initOutput = path.join(RECORDINGS_DIR, `output_${initSession}.mp3`);
             
             try {
-                await downloadTTSWithFallback(currentEnglishVoice, "Hello! I am Voice bot! Your personal assistant. How can I help you today?", initOutput, "en");
+                await downloadTTSWithFallback(currentEnglishVoice, "Hello! I am online. Speak to me in any language you like!", initOutput, "en");
                 if (fs.existsSync(initOutput)) enqueueAudio(initOutput, connection, []);
             } catch (ttsErr) {}
 
@@ -283,8 +282,18 @@ client.on('interactionCreate', async (interaction) => {
 
                 activeRecordingUsers.add(userId);
                 const sessionID = `${userId}_${Date.now()}`;
+                
+                // CRITICAL CHANCE: Scurtat timpul de detecție a tăcerii la 650ms pentru viteză maximă de răspuns
                 const opusStream = receiver.subscribe(userId, {
-                    end: { behavior: EndBehaviorType.AfterSilence, duration: 1300 }
+                    end: { behavior: EndBehaviorType.AfterSilence, duration: 650 }
+                });
+
+                // REZOLVARE DECRIPTARE (DAVE CRASH BYPASS):
+                opusStream.on('error', (err) => {
+                    if (err.message.includes('decrypt') || err.message.includes('DecryptionFailed')) {
+                        return; // Ignorăm erorile de criptare Discord ca să nu dea crash
+                    }
+                    console.error("Opus Stream Error:", err);
                 });
 
                 const decoder = new Prism.opus.Decoder({ rate: 16000, channels: 1, frameSize: 960 });
@@ -343,9 +352,19 @@ client.on('interactionCreate', async (interaction) => {
 
                                 if (conversationMemory[guildId].length > 20) conversationMemory[guildId].shift();
 
+                                // SISTEMUL DE LIMBĂ COMPLET DEBLOCAT ȘI INTELIGENT
                                 const systemPrompt = { 
                                     role: 'system', 
-                                    content: "You are Voice-Bot, a real human chatting on Discord. You must ALWAYS respond in a strict JSON format with exactly two keys: 'text' (your response) and 'lang' (the ISO code of the language, e.g., 'ro', 'en', 'es', 'fr', 'de'). CRITICAL LANGUAGES RULE: You are completely multilingual. You MUST always detect the language the user is speaking, and respond 100% in that exact same language to match them flawlessly. If they switch to Romanian, switch entirely to Romanian. If they speak English, speak English. CRITICAL FORMATTING RULE: Do not use emojis under any circumstances. Keep responses to 1 or 2 sentences, casual, and natural." 
+                                    content: `You are Voice-Bot, a highly adaptive, natural AI chatting on Discord.
+                                    
+                                    UNIVERSAL LANGUAGE RULE:
+                                    1. You are 100% multilingual and can understand and speak ANY language in the world (Romanian, English, Spanish, German, French, etc.).
+                                    2. ALWAYS detect the language the user is currently speaking. You MUST respond 100% in that exact same language.
+                                    3. Be extremely smart: If the user speaks English but pronounces words poorly (e.g., "Ken Domo", "Dharma", "Watsakendama"), understand that they are talking about "Kendama" in English, and respond in English. Do not switch to Dutch, Ukrainian, or Russian unless they actually start speaking in those languages.
+                                    
+                                    FORMATTING:
+                                    - Always output a strict JSON format with exactly two keys: 'text' (your response) and 'lang' (the ISO 2-letter code of the language, e.g., 'ro', 'en', 'fr', 'de', 'es').
+                                    - Do not use any emojis. Keep responses to 1-2 short, natural sentences.`
                                 };
 
                                 const fullMessages = [systemPrompt, ...conversationMemory[guildId]];
@@ -373,7 +392,6 @@ client.on('interactionCreate', async (interaction) => {
 
                                 const outputFilename = path.join(RECORDINGS_DIR, `output_${sessionID}.mp3`);
                                 
-                                // Apelăm funcția cu noul sistem de filtrare a textului curat
                                 await downloadTTSWithFallback(currentEnglishVoice, botReplyText, outputFilename, detectedLang);
 
                                 activeRecordingUsers.delete(userId);
@@ -409,5 +427,4 @@ function cleanupFiles(...files) {
     });
 }
 
-// Folosim direct string-ul ca să evităm alte probleme de rezoluție a modulelor
 client.login(process.env.DISCORD_TOKEN);
