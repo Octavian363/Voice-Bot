@@ -270,7 +270,7 @@ client.on('interactionCreate', async (interaction) => {
             const initOutput = path.join(RECORDINGS_DIR, `output_${initSession}.mp3`);
             
             try {
-                await downloadTTSWithFallback(currentEnglishVoice, "Hello! I am online. Speak to me in any language you like!", initOutput, "en");
+                await downloadTTSWithFallback(currentEnglishVoice, "Hello! My name is Voice Bot! Your person assistant! Ask me anything!", initOutput, "en");
                 if (fs.existsSync(initOutput)) enqueueAudio(initOutput, connection, []);
             } catch (ttsErr) {}
 
