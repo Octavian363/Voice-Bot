@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ApplicationCommandOptionType, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, EndBehaviorType, getVoiceConnection, StreamType } = require('@discordjs/voice');
 const Prism = require('prism-media');
 const fs = require('fs');
@@ -52,8 +52,20 @@ function nukeRecordingsFolder() {
     }
 }
 
-function enqueueAudio(audioFile, connection, filesToCleanup) {
-    audioQueue.push({ audioFile, connection, filesToCleanup });
+function cleanupFiles(...files) {
+    files.forEach(file => {
+        try { 
+            if (file && fs.existsSync(file)) fs.unlinkSync(file); 
+        } catch (e) {
+            console.error(`Failed to cleanup file ${file}:`, e.message);
+        }
+    });
+}
+
+function enqueueAudio(audioFile, connection, filesToCleanup = []) {
+    // Ne asigurăm că fișierul audio principal este adăugat în lista de curățare
+    const uniqueCleanupFiles = Array.from(new Set([...filesToCleanup, audioFile]));
+    audioQueue.push({ audioFile, connection, filesToCleanup: uniqueCleanupFiles });
     processQueue();
 }
 
@@ -66,8 +78,7 @@ function processQueue() {
     if (!fs.existsSync(current.audioFile)) {
         cleanupFiles(...current.filesToCleanup);
         isPlaying = false;
-        setTimeout(processQueue, 50);
-        return;
+        return processQueue();
     }
 
     const ffmpegStream = ffmpeg(current.audioFile)
@@ -95,7 +106,7 @@ function processQueue() {
     player.on('idle', () => {
         cleanupFiles(...current.filesToCleanup, current.audioFile);
         isPlaying = false;
-        setTimeout(processQueue, 300); 
+        setTimeout(processQueue, 200); 
     });
 }
 
@@ -160,6 +171,34 @@ function fetchDirectUrl(targetUrl, dest) {
     });
 }
 
+// Apel Groq cu sistem de Fallback
+async function getGroqChatCompletion(messages) {
+    const candidateModels = [
+        'openai/gpt-oss-20b',
+        'llama-3.1-8b-instant',
+        'llama-3.3-70b-versatile',
+        'openai/gpt-oss-120b'
+    ];
+
+    for (const model of candidateModels) {
+        try {
+            const completion = await groq.chat.completions.create({
+                messages: messages,
+                model: model,
+                response_format: { type: "json_object" }
+            });
+            return completion;
+        } catch (err) {
+            if (err.status === 404 || (err.error && err.error.code === 'model_not_found')) {
+                console.warn(`Model ${model} unavailable (404), trying next candidate...`);
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw new Error('All candidate Groq models failed or are unavailable.');
+}
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds, 
@@ -209,25 +248,37 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
-    try {
-        if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply().catch(() => {});
+    let hasResponded = false;
+    const safeReply = async (content) => {
+        try {
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply(content);
+            } else {
+                await interaction.reply(content);
+            }
+            hasResponded = true;
+        } catch (e) {
+            console.error('Safe reply error:', e.message);
         }
+    };
+
+    try {
+        await interaction.deferReply().catch(() => {});
 
         if (interaction.commandName === 'voice') {
             const selectedVoice = interaction.options.getString('type');
             currentEnglishVoice = selectedVoice;
-            return await interaction.editReply({ content: `Your voice preference has been switched to: **${selectedVoice}**!` });
+            return await safeReply({ content: `Your voice preference has been switched to: **${selectedVoice}**!` });
         }
 
         if (interaction.commandName === 'mute') {
             isMuted = true;
-            return await interaction.editReply({ content: 'Muted! I will no longer listen or respond until you use /unmute.' });
+            return await safeReply({ content: 'Muted! I will no longer listen or respond until you use /unmute.' });
         }
 
         if (interaction.commandName === 'unmute') {
             isMuted = false;
-            return await interaction.editReply({ content: 'Unmuted! I have started listening and speaking again.' });
+            return await safeReply({ content: 'Unmuted! I have started listening and speaking again.' });
         }
 
         if (interaction.commandName === 'leave') {
@@ -239,15 +290,15 @@ client.on('interactionCreate', async (interaction) => {
                 activeRecordingUsers.clear();
                 delete conversationMemory[interaction.guild.id]; 
                 nukeRecordingsFolder(); 
-                return await interaction.editReply({ content: 'Bye! Left the voice channel.' });
+                return await safeReply({ content: 'Bye! Left the voice channel.' });
             } else {
-                return await interaction.editReply({ content: 'I am not in a voice channel!' });
+                return await safeReply({ content: 'I am not in a voice channel!' });
             }
         }
 
         if (interaction.commandName === 'join') {
             const voiceChannel = interaction.member.voice.channel;
-            if (!voiceChannel) return await interaction.editReply({ content: 'Please join a voice channel first!' });
+            if (!voiceChannel) return await safeReply({ content: 'Please join a voice channel first!' });
 
             isMuted = false;
 
@@ -260,15 +311,19 @@ client.on('interactionCreate', async (interaction) => {
             });
 
             conversationMemory[interaction.guild.id] = [];
-            await interaction.editReply(`I joined! You can talk now.`);
+            await safeReply({ content: 'I joined! You can talk now.' });
 
             const initSession = `init_${Date.now()}`;
             const initOutput = path.join(RECORDINGS_DIR, `output_${initSession}.mp3`);
             
             try {
                 await downloadTTSWithFallback(currentEnglishVoice, "Hello! I am Voice-Bot! Your personal assistant! Ask me anything!", initOutput, "en");
-                if (fs.existsSync(initOutput)) enqueueAudio(initOutput, connection, []);
-            } catch (ttsErr) {}
+                if (fs.existsSync(initOutput)) {
+                    enqueueAudio(initOutput, connection, [initOutput]);
+                }
+            } catch (ttsErr) {
+                console.error("Error generating greeting audio:", ttsErr.message);
+            }
 
             const receiver = connection.receiver;
 
@@ -353,7 +408,7 @@ client.on('interactionCreate', async (interaction) => {
                                     UNIVERSAL LANGUAGE RULE:
                                     1. You are 100% multilingual and can understand and speak ANY language in the world (Romanian, English, Spanish, German, French, etc.).
                                     2. ALWAYS detect the language the user is currently speaking. You MUST respond 100% in that exact same language.
-                                    3. Be extremely smart: If the user speaks English but pronounces words poorly (e.g., "Ken Domo", "Dharma", "Watsakendama"), understand that they are talking about "Kendama" in English, and respond in English. Do not switch to Dutch, Ukrainian, or Russian unless they actually start speaking in those languages.
+                                    3. Be extremely smart: If the user speaks English but pronounces words poorly, understand context and respond in English.
                                     
                                     FORMATTING:
                                     - Always output a strict JSON format with exactly two keys: 'text' (your response) and 'lang' (the ISO 2-letter code of the language, e.g., 'ro', 'en', 'fr', 'de', 'es').
@@ -362,11 +417,7 @@ client.on('interactionCreate', async (interaction) => {
 
                                 const fullMessages = [systemPrompt, ...conversationMemory[guildId]];
 
-                                const chatCompletion = await groq.chat.completions.create({
-                                    messages: fullMessages,
-                                    model: 'llama-3.1-8b-instant', 
-                                    response_format: { type: "json_object" }
-                                });
+                                const chatCompletion = await getGroqChatCompletion(fullMessages);
 
                                 let botReplyText = "";
                                 let detectedLang = "en";
@@ -413,11 +464,5 @@ client.on('interactionCreate', async (interaction) => {
         console.error("Interaction Error caught safely:", err);
     }
 });
-
-function cleanupFiles(...files) {
-    files.forEach(file => {
-        try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (e) {}
-    });
-}
 
 client.login(process.env.DISCORD_TOKEN);
