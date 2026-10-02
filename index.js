@@ -104,13 +104,11 @@ function downloadTTSWithFallback(voiceType, text, dest, lang) {
         const cleanText = text.replace(/["'\\]/g, '').trim();
         const encodedText = encodeURIComponent(cleanText);
 
-        // Dacă limba este română
         if (lang === 'ro') {
             const googleRoUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=ro&client=tw-ob`;
             return fetchDirectUrl(googleRoUrl, dest).then(resolve).catch(reject);
         }
 
-        // Configurare voci pentru Engleză
         let targetRegion = lang; 
         if (lang === 'en') {
             if (voiceType === 'Brian') targetRegion = 'en-AU';
@@ -120,18 +118,15 @@ function downloadTTSWithFallback(voiceType, text, dest, lang) {
             else if (voiceType === 'Aditi') targetRegion = 'en-IN';
         }
 
-        // URL universal în funcție de limba returnată de AI (suportă ORICE limbă din lume)
         const primaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${targetRegion}&client=tw-ob`;
 
         fetchDirectUrl(primaryUrl, dest)
             .then(resolve)
             .catch(() => {
-                // Fallback A: StreamElements
                 const streamElementsUrl = `https://api.streamelements.com/v2/tts?voice=${voiceType}&text=${encodedText}`;
                 fetchDirectUrl(streamElementsUrl, dest)
                     .then(resolve)
                     .catch(() => {
-                        // Fallback B: Google Translate standard pe limba detectată
                         const absoluteBackupUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${lang}&client=tw-ob`;
                         fetchDirectUrl(absoluteBackupUrl, dest).then(resolve).catch(reject);
                     });
@@ -368,7 +363,7 @@ client.on('interactionCreate', async (interaction) => {
 
                                 const chatCompletion = await groq.chat.completions.create({
                                     messages: fullMessages,
-                                    model: 'llama-3.1-8b-instant', 
+                                    model: 'llama-3.3-70b-versatile', 
                                     response_format: { type: "json_object" }
                                 });
 
