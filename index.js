@@ -208,10 +208,11 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    if (Date.now() - interaction.createdTimestamp > 3000) return;
 
     try {
-        await interaction.deferReply();
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply().catch(() => {});
+        }
 
         if (interaction.commandName === 'voice') {
             const selectedVoice = interaction.options.getString('type');
@@ -363,7 +364,7 @@ client.on('interactionCreate', async (interaction) => {
 
                                 const chatCompletion = await groq.chat.completions.create({
                                     messages: fullMessages,
-                                    model: 'llama-3.3-70b-versatile', 
+                                    model: 'llama-3.1-8b-instant', 
                                     response_format: { type: "json_object" }
                                 });
 
