@@ -270,7 +270,7 @@ client.on('interactionCreate', async (interaction) => {
             const initOutput = path.join(RECORDINGS_DIR, `output_${initSession}.mp3`);
             
             try {
-                await downloadTTSWithFallback(currentEnglishVoice, "Hello! My name is Voice Bot! Your person assistant! Ask me anything!", initOutput, "en");
+                await downloadTTSWithFallback(currentEnglishVoice, "Hello! I am Voice-Bot! Your personal assistant! Ask me anything!", initOutput, "en");
                 if (fs.existsSync(initOutput)) enqueueAudio(initOutput, connection, []);
             } catch (ttsErr) {}
 
@@ -283,15 +283,13 @@ client.on('interactionCreate', async (interaction) => {
                 activeRecordingUsers.add(userId);
                 const sessionID = `${userId}_${Date.now()}`;
                 
-                // CRITICAL CHANCE: Scurtat timpul de detecție a tăcerii la 650ms pentru viteză maximă de răspuns
                 const opusStream = receiver.subscribe(userId, {
                     end: { behavior: EndBehaviorType.AfterSilence, duration: 650 }
                 });
 
-                // REZOLVARE DECRIPTARE (DAVE CRASH BYPASS):
                 opusStream.on('error', (err) => {
                     if (err.message.includes('decrypt') || err.message.includes('DecryptionFailed')) {
-                        return; // Ignorăm erorile de criptare Discord ca să nu dea crash
+                        return;
                     }
                     console.error("Opus Stream Error:", err);
                 });
@@ -352,7 +350,6 @@ client.on('interactionCreate', async (interaction) => {
 
                                 if (conversationMemory[guildId].length > 20) conversationMemory[guildId].shift();
 
-                                // SISTEMUL DE LIMBĂ COMPLET DEBLOCAT ȘI INTELIGENT
                                 const systemPrompt = { 
                                     role: 'system', 
                                     content: `You are Voice-Bot, a highly adaptive, natural AI chatting on Discord.
@@ -371,7 +368,7 @@ client.on('interactionCreate', async (interaction) => {
 
                                 const chatCompletion = await groq.chat.completions.create({
                                     messages: fullMessages,
-                                    model: 'llama-3.3-70b-versatile', 
+                                    model: 'llama-3.1-8b-instant', 
                                     response_format: { type: "json_object" }
                                 });
 
